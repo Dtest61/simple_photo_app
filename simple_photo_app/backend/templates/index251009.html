@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>写真アップロード</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <style>
+    :root{
+      --btn-h: 64px;
+      --btn-font: 20px;
+      --btn-radius: 12px;
+      --pad-x: 24px;
+    }
+    body { font-family: system-ui, sans-serif; margin: 40px 16px; text-align: center; }
+    h1 { font-size: 28px; margin-bottom: 10px; }
+
+    /* 統一ボタン */
+    .btn{
+      display:inline-flex; align-items:center; justify-content:center;
+      height: var(--btn-h); padding: 0 var(--pad-x);
+      font-size: var(--btn-font); font-weight:600;
+      border:none; border-radius: var(--btn-radius); color:#fff; cursor:pointer;
+      min-width: 320px; box-shadow: 0 2px 0 rgba(0,0,0,.08);
+      transition: transform .02s ease;
+    }
+    .btn:active{ transform: translateY(1px); }
+    .btn--primary{ background:#2196f3; }
+    .btn--success{ background:#4caf50; }
+    .btn--danger{  background:#e53935; min-width: 120px; height: 40px; font-size: 16px; padding: 0 12px; }
+    .btn--full{ width:100%; min-width: 0; }
+
+    .message{ margin: 10px auto 6px; font-size: 16px; color:#2e7d32; }
+
+    /* ギャラリー */
+    .gallery { margin-top: 16px; display:flex; flex-wrap:wrap; gap:14px; justify-content:center; }
+    .card { width: 220px; padding:8px; border:1px solid #ddd; border-radius:10px; }
+    .card img { width:100%; height:auto; border-radius:8px; box-shadow:0 0 5px #aaa; cursor:zoom-in; }
+
+    /* 進捗バー */
+    .progress { margin: 10px auto; width: 80%; height: 10px; background:#eee; border-radius:6px; overflow:hidden; }
+    .bar{ height:100%; width:0%; background:#2196f3; transition: width .2s; }
+
+    /* === 画面下固定バー === */
+    .bottom-bar{
+      position: fixed; left:0; right:0; bottom:0;
+      background:#fff; box-shadow: 0 -6px 18px rgba(0,0,0,.08);
+      padding: 10px max(16px, env(safe-area-inset-left))
+               calc(10px + env(safe-area-inset-bottom))
+               max(16px, env(safe-area-inset-right));
+      display:flex; gap:12px; justify-content:center; align-items:center; z-index:1000;
+    }
+    /* 固定バーに隠れないよう下余白を確保 */
+    body{ padding-bottom: 120px; }
+
+    /* モバイル：縦積み＆フル幅 */
+    @media (max-width: 560px){
+      .bottom-bar{ flex-direction: column; }
+      .btn{ width:100%; min-width:0; }
+      body{ padding-bottom: 170px; }
+    }
+
+    /* === ライトボックス === */
+    .lightbox{ position:fixed; inset:0; background:rgba(0,0,0,.8);
+      display:flex; align-items:center; justify-content:center; z-index:9999; padding:24px;}
+    .lightbox-content{ position:relative; max-width:92vw; max-height:86vh; display:flex; flex-direction:column; align-items:center; }
+    .lightbox img{ max-width:92vw; max-height:80vh; object-fit:contain; border-radius:8px; box-shadow:0 0 10px rgba(0,0,0,.5);}
+    .lb-caption{ color:#fff; margin-top:10px; font-size:16px; }
+    .lb-btn{ position:absolute; top:50%; transform:translateY(-50%); font-size:28px; padding:16px 18px; border-radius:50%; border:none; cursor:pointer; background:rgba(33,150,243,.95); color:#fff; }
+    .lb-prev{ left:-10px; } .lb-next{ right:-10px; }
+    .lb-close{ position:absolute; top:-12px; right:-12px; font-size:20px; padding:10px 14px; border-radius:999px; background:rgba(229,57,53,.95); color:#fff; border:none; cursor:pointer; }
+  </style>
+</head>
+<body>
+
+{% verbatim %}
+  <div id="app">
+    <h1>📷 写真をアップロード</h1>
+
+    <div class="message" v-if="message">{{ message }}</div>
+    <div class="progress" v-if="progress > 0 && progress < 100">
+      <div class="bar" :style="{ width: progress + '%' }"></div>
+    </div>
+    <div v-if="progress === 100" class="message">アップロード完了！</div>
+
+    <!-- ギャラリー -->
+    <div class="gallery" v-if="photos.length">
+      <div class="card" v-for="(photo, idx) in photos" :key="photo.id">
+        <img :src="photo.image" :alt="'Photo #' + photo.id" @click="openLightbox(idx)" />
+        <div style="margin-top:8px">
+          <button class="btn btn--danger" @click="removePhoto(photo.id)">削除</button>
+        </div>
+      </div>
+    </div>
+    <div v-else style="margin-top:14px; color:#666;">まだ写真がありません。</div>
+
+    <!-- 画面下固定バー -->
+    <div class="bottom-bar">
+      <!-- 隠しファイル入力 -->
+      <input type="file" ref="fileInput" accept="image/*" @change="handleFile" style="display:none;" />
+      <button class="btn btn--primary" @click="selectFile">写真を選んでアップロード</button>
+      <button class="btn btn--success" @click="downloadZip">写真をまとめてダウンロード（ZIP）</button>
+    </div>
+
+    <!-- ライトボックス -->
+    <div v-if="isLightboxOpen && currentPhoto" class="lightbox" role="dialog" aria-modal="true"
+         @click.self="closeLightbox" @touchstart="onTouchStart" @touchend="onTouchEnd">
+      <div class="lightbox-content">
+        <button class="lb-close" @click="closeLightbox">✕ とじる</button>
+        <button class="lb-btn lb-prev" @click="prevPhoto" aria-label="前の写真">‹</button>
+        <img :src="currentPhoto.image" :alt="'Photo #' + currentPhoto.id" />
+        <button class="lb-btn lb-next" @click="nextPhoto" aria-label="次の写真">›</button>
+        <div class="lb-caption">写真 {{ currentIndex + 1 }} / {{ photos.length }}</div>
+      </div>
+    </div>
+  </div>
+{% endverbatim %}
+
+  <script>
+    const { createApp, ref, onMounted, onUnmounted, computed } = Vue;
+
+    createApp({
+      setup() {
+        const message = ref('');
+        const progress = ref(0);
+        const fileInput = ref(null);
+        const photos = ref([]);
+
+        // ライトボックス
+        const isLightboxOpen = ref(false);
+        const currentIndex = ref(0);
+        const currentPhoto = computed(() => photos.value[currentIndex.value] || null);
+
+        const lockScroll = (on) => { document.body.style.overflow = on ? 'hidden' : 'auto'; };
+
+        const getCSRFToken = () => {
+          const m = document.cookie.match(/csrftoken=([^;]+)/);
+          return m ? m[1] : '';
+        };
+
+        const selectFile = () => fileInput.value?.click();
+
+        const fetchPhotos = async () => {
+          try {
+            const res = await axios.get('/api/photos/', { withCredentials: true });
+            photos.value = res.data;
+          } catch (e) { console.error('画像取得に失敗しました', e); }
+        };
+
+        const handleFile = async (e) => {
+          const file = e.target.files[0]; if (!file) return;
+          message.value = ''; progress.value = 0;
+
+          const formData = new FormData(); formData.append('image', file);
+          try {
+            await axios.post('/api/photos/', formData, {
+              withCredentials: true,
+              headers: { 'X-CSRFToken': getCSRFToken() },
+              onUploadProgress: (ev) => { if (ev.total) progress.value = Math.round((ev.loaded/ev.total)*100); }
+            });
+            message.value = '✅ アップロード成功！';
+            if (fileInput.value) fileInput.value.value = '';
+            await fetchPhotos(); setTimeout(() => progress.value = 0, 700);
+          } catch (e) { console.error(e); message.value = '❌ アップロードに失敗しました'; progress.value = 0; }
+        };
+
+        const removePhoto = async (id) => {
+          if (!confirm('この写真を削除します。よろしいですか？')) return;
+          try {
+            await axios.delete(`/api/photos/${id}/`, {
+              withCredentials: true,
+              headers: { 'X-CSRFToken': getCSRFToken() }
+            });
+            message.value = '🗑️ 削除しました'; await fetchPhotos();
+          } catch (e) { console.error(e); message.value = '削除に失敗しました'; }
+        };
+
+        const downloadZip = () => window.open('/api/photos/zip/', '_blank');
+
+        // ライトボックス操作
+        const openLightbox = (idx) => { currentIndex.value = idx; isLightboxOpen.value = true; lockScroll(true); };
+        const closeLightbox = () => { isLightboxOpen.value = false; lockScroll(false); };
+        const prevPhoto = () => { if (photos.value.length) currentIndex.value = (currentIndex.value - 1 + photos.value.length) % photos.value.length; };
+        const nextPhoto = () => { if (photos.value.length) currentIndex.value = (currentIndex.value + 1) % photos.value.length; };
+
+        // キーボード
+        const onKeyDown = (e) => { if (!isLightboxOpen.value) return;
+          if (e.key === 'Escape') closeLightbox(); if (e.key === 'ArrowLeft') prevPhoto(); if (e.key === 'ArrowRight') nextPhoto(); };
+
+        // スワイプ
+        let sx=0, sy=0;
+        const onTouchStart = (e) => { const t=e.changedTouches[0]; sx=t.clientX; sy=t.clientY; };
+        const onTouchEnd = (e) => { const t=e.changedTouches[0]; const dx=t.clientX-sx, dy=t.clientY-sy;
+          if (Math.abs(dx)>50 && Math.abs(dy)<80) { dx>0 ? prevPhoto() : nextPhoto(); } };
+
+        onMounted(() => { fetchPhotos(); window.addEventListener('keydown', onKeyDown); });
+        onUnmounted(() => { window.removeEventListener('keydown', onKeyDown); });
+
+        return {
+          // state
+          message, progress, fileInput, photos,
+          isLightboxOpen, currentIndex, currentPhoto,
+          // actions
+          selectFile, handleFile, fetchPhotos, removePhoto, downloadZip,
+          openLightbox, closeLightbox, prevPhoto, nextPhoto, onTouchStart, onTouchEnd
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

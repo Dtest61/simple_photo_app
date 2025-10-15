@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>写真アップロード</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <!-- head内に埋め込み（重要） -->
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      margin-top: 50px;
+    }
+    button {
+      font-size: 24px;
+      padding: 1.5rem 2rem;
+      background-color: #2196f3;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    input[type="file"] {
+      display: none;
+    }
+    .message {
+      margin-top: 20px;
+      font-size: 18px;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h1>📷 写真をアップロード</h1>
+
+    <input type="file" id="fileInput" @change="handleFile" ref="fileInput" accept="image/*" />
+
+    <button @click="selectFile">写真を選んでアップロード</button>
+
+    <div class="message" v-if="message">{{ message }}</div>
+  </div>
+
+  <script>
+    const { createApp, ref } = Vue
+
+    createApp({
+      setup() {
+        const message = ref('')
+        const fileInput = ref(null)
+
+        const selectFile = () => {
+          fileInput.value.click()
+        }
+
+        const handleFile = async (event) => {
+          const file = event.target.files[0]
+          if (!file) return
+
+          const formData = new FormData()
+          formData.append('image', file)
+
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content')  
+
+          try {
+            const response = await axios.post('http://127.0.0.1:8000/api/photos/', formData, {
+              withCredentials: true,
+              headers: {
+                'X-CSRFToken': csrfToken, // ← これがポイント！
+                'Content-Type': 'multipart/form-data'
+            //'Content-Type': 'multipart/form-data'
+              }
+            })
+            message.value = '✅ アップロード成功！'
+          } catch (error) {
+            console.error(error)
+            message.value = '❌ アップロードに失敗しました'
+          }
+        }
+
+        return {
+          message,
+          fileInput,
+          selectFile,
+          handleFile
+        }
+      }
+    }).mount('#app')
+  </script>
+</body>
+</html>

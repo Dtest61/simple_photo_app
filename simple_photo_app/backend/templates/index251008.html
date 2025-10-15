@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>写真アップロード</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; margin: 40px 16px; }
+    h1 { font-size: 28px; margin-bottom: 24px; }
+    .row { margin: 12px 0; }
+    button {
+      font-size: 22px; padding: 16px 24px; margin: 8px;
+      background-color: #2196f3; color: #fff; border: none; border-radius: 10px; cursor: pointer;
+    }
+    button.secondary { background: #4caf50; }
+    button.danger { background: #e53935; font-size: 16px; padding: 8px 12px; }
+    input[type="file"] { display: none; }
+    .message { margin-top: 14px; font-size: 18px; color: #2e7d32; }
+    .progress { margin: 10px auto; width: 80%; height: 10px; background: #eee; border-radius: 6px; overflow: hidden; }
+    .bar { height: 100%; background: #2196f3; width: 0%; transition: width .2s; }
+    .gallery {
+      margin-top: 24px; display: flex; flex-wrap: wrap; justify-content: center; gap: 14px;
+    }
+    .card { padding: 8px; border: 1px solid #ddd; border-radius: 10px; width: 220px; }
+    .card img {
+      width: 100%; height: auto; border-radius: 8px; box-shadow: 0 0 5px #aaa;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h1>📷 写真をアップロード</h1>
+
+    <!-- ファイル選択（非表示） -->
+    <input type="file" ref="fileInput" accept="image/*" @change="handleFile" />
+
+    <!-- 大きな操作ボタン -->
+    <div class="row">
+      <button @click="selectFile">写真を選んでアップロード</button>
+      <button class="secondary" @click="downloadZip">写真をまとめてダウンロード（ZIP）</button>
+    </div>
+
+    <!-- メッセージ -->
+    <div class="message" v-if="message">{{ message }}</div>
+
+    <!-- 進捗バー -->
+    <div class="progress" v-if="progress > 0 && progress < 100">
+      <div class="bar" :style="{ width: progress + '%' }"></div>
+    </div>
+    <div v-if="progress === 100" class="message">アップロード完了！</div>
+
+    <!-- ギャラリー -->
+    <div class="gallery" v-if="photos.length">
+      <div class="card" v-for="photo in photos" :key="photo.id">
+        <img :src="photo.image" :alt="'Photo #' + photo.id" />
+        <div style="margin-top:8px">
+          <button class="danger" @click="removePhoto(photo.id)">削除</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-else style="margin-top:20px; color:#666;">まだ写真がありません。</div>
+  </div>
+
+  <script>
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const message = ref('');
+        const progress = ref(0);
+        const fileInput = ref(null);
+        const photos = ref([]);
+
+        // 同一ブラウザで Django /admin にログイン済みである前提（セッション＋CSRFクッキー）
+        const getCSRFToken = () => {
+          const m = document.cookie.match(/csrftoken=([^;]+)/);
+          return m ? m[1] : '';
+        };
+
+        const selectFile = () => fileInput.value && fileInput.value.click();
+
+        const fetchPhotos = async () => {
+          try {
+            const res = await axios.get('/api/photos/', { withCredentials: true });
+            photos.value = res.data;
+          } catch (err) {
+            console.error('画像取得に失敗しました', err);
+          }
+        };
+
+        const handleFile = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          message.value = '';
+          progress.value = 0;
+
+          const formData = new FormData();
+          formData.append('image', file);
+
+          try {
+            await axios.post('/api/photos/', formData, {
+              withCredentials: true,
+              headers: { 'X-CSRFToken': getCSRFToken() },
+              onUploadProgress: (ev) => {
+                if (ev.total) progress.value = Math.round((ev.loaded / ev.total) * 100);
+              }
+            });
+            message.value = '✅ アップロード成功！';
+            // input をリセット
+            if (fileInput.value) fileInput.value.value = '';
+            await fetchPhotos();
+            setTimeout(() => (progress.value = 0), 700);
+          } catch (err) {
+            console.error(err);
+            message.value = '❌ アップロードに失敗しました';
+            progress.value = 0;
+          }
+        };
+
+        const removePhoto = async (id) => {
+          if (!confirm('この写真を削除します。よろしいですか？')) return;
+          try {
+            await axios.delete(`/api/photos/${id}/`, {
+              withCredentials: true,
+              headers: { 'X-CSRFToken': getCSRFToken() }
+            });
+            message.value = '🗑️ 削除しました';
+            await fetchPhotos();
+          } catch (err) {
+            console.error(err);
+            message.value = '削除に失敗しました';
+          }
+        };
+
+        const downloadZip = () => {
+          // 同一オリジンで index.html を配信していれば相対URLでOK
+          window.open('/api/photos/zip/', '_blank');
+        };
+
+        onMounted(fetchPhotos);
+
+        return {
+          message, progress, fileInput, photos,
+          selectFile, handleFile, fetchPhotos, removePhoto, downloadZip
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
